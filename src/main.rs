@@ -14,13 +14,15 @@ struct State {
     selected: i32,
     path: String,
     entries: Vec<Entry>,
+    show_hidden: bool,
 }
 
 fn main() -> Result<(), Err> {
     let mut state = State {
         selected: 0,
         path: "/mnt/".to_string(),
-        entries: vec!(),
+        entries: Vec::new(),
+        show_hidden: false,
     };
 
     terminal::enable_raw_mode()?;
@@ -53,7 +55,7 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
         KeyCode::Up => state.selected -= 1,
         KeyCode::Down => state.selected += 1,
         KeyCode::Right => {
-            if !state.entries[state.selected as usize].is_file {
+            if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
                 state.path = state.entries[state.selected as usize].path.to_string();
                 state.selected = 0;
             }
@@ -68,7 +70,7 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
             }
         },
         KeyCode::Enter => {
-            if state.entries[state.selected as usize].is_file {
+            if state.entries.len() > 0 && state.entries[state.selected as usize].is_file {
                 let mut p = state.entries[state.selected as usize].path.clone();
                 p.pop();
                 Command::new("mpv")
@@ -76,7 +78,8 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
                     .stdout(File::create("./log")?)
                     .spawn()?;
             }
-        }
+        },
+        KeyCode::Char('h') => state.show_hidden = !state.show_hidden,
         _ => (),
     };
 
@@ -86,17 +89,20 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
 fn update(state: &mut State) -> Result<(), Err> {
     let dir = fs::read_dir(state.path.as_str());
     if dir.is_err() {
-        let _ = quit();
+        return Ok(());
     }
     state.entries.clear();
     for d in dir.unwrap() {
-        state.entries.push(Entry {
+        let e = Entry {
             path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string() + "/",
             name: d.as_ref().unwrap().file_name().into_string().unwrap(),
             is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
-        });
+        };
+        if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" {
+            state.entries.push(e);
+        }
     }
-    state.entries.sort_by_key(|e| e.name.clone());
+    state.entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     if state.selected < 0 || state.selected >= state.entries.len() as i32 {
         if state.entries.len() > 0 {
             state.selected = state.selected.rem_euclid(state.entries.len() as i32);
@@ -107,16 +113,14 @@ fn update(state: &mut State) -> Result<(), Err> {
 }
 
 fn draw(state: &State) -> Result<(), Err> {
-    let fg: Color = Color::White;
-    let bg: Color = Color::White;
-    let max_size: (u16, u16) = (120, 20);
+    let max_size: (u16, u16) = (400, 20);
     let mut size: (u16, u16) = crossterm::terminal::size()?;
     size = (min(size.0, max_size.0), min(size.1, max_size.1));
 
     clear()?;
-    draw_rect(0, 0, size.0-1, size.1-1, bg)?;
+    draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
 
-    draw_text(1, 0, format!(" {0} ", state.path).as_str(), fg)?;
+    draw_text(1, 0, format!(" {0} ", state.path).as_str(), Color::Cyan)?;
 
     let mut offset: i32 = 1;
     if state.selected >= size.1 as i32 - 2 {
@@ -128,10 +132,13 @@ fn draw(state: &State) -> Result<(), Err> {
         let y = i + offset;
         if y > 0 && y < size.1 as i32 - 1 {
             if state.selected == i as i32 {
-                draw_text(2, y as u16, ">", fg)?;
+                draw_text(2, y as u16, ">", Color::White)?;
             }
-            let n = (&entry.name).to_string() + "/";
-            draw_text(4, y as u16, if entry.is_file {&entry.name} else {&n}, fg)?;
+            if entry.is_file {
+                draw_text(4, y as u16, &entry.name, Color::White)?;
+            } else {
+                draw_text(4, y as u16, &((&entry.name).to_string() + "/"), Color::Cyan)?;
+            }
         }
         i += 1;
     }
