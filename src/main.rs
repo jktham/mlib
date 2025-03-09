@@ -1,18 +1,39 @@
-use std::{cmp::min, fs, io::{stdout, Write}, time::Duration};
+use std::{cmp::min, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
 use crossterm::{cursor, event::{self, Event, KeyCode, KeyEvent}, style::{self, Color, Stylize}, terminal, ExecutableCommand, QueueableCommand};
+
 type Err = Box<dyn std::error::Error>;
 
+#[derive(Clone)]
+struct Entry {
+    path: String,
+    name: String,
+    is_file: bool,
+}
+
+struct State {
+    selected: i32,
+    path: String,
+    entries: Vec<Entry>,
+}
+
 fn main() -> Result<(), Err> {
+    let mut state = State {
+        selected: 0,
+        path: "/mnt/".to_string(),
+        entries: vec!(),
+    };
+
     terminal::enable_raw_mode()?;
     stdout().execute(cursor::Hide)?;
     stdout().execute(terminal::EnterAlternateScreen)?;
     
-    draw()?;
+    update(&mut state)?;
+    draw(&state)?;
 
     loop {
         if event::poll(Duration::from_millis(1000))? {
             match event::read()? {
-                Event::Key(event) => input(event)?,
+                Event::Key(event) => input(event, &mut state)?,
                 Event::FocusGained => (),
                 Event::FocusLost => (),
                 Event::Mouse(_) => (),
@@ -20,21 +41,72 @@ fn main() -> Result<(), Err> {
                 Event::Resize(_, _) => (),
             };
 
-            draw()?;
+            update(&mut state)?;
+            draw(&state)?;
         }
     }
 }
 
-fn input(event: KeyEvent) -> Result<(), Err> {
+fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
     match event.code {
         KeyCode::Char('q') => quit()?,
+        KeyCode::Up => state.selected -= 1,
+        KeyCode::Down => state.selected += 1,
+        KeyCode::Right => {
+            if !state.entries[state.selected as usize].is_file {
+                state.path = state.entries[state.selected as usize].path.to_string();
+                state.selected = 0;
+            }
+        },
+        KeyCode::Left => {
+            state.path = state.path[0..state.path.rfind("/").unwrap_or(0)].to_string();
+            if state.path.len() > 0 {
+                state.path = state.path[0..state.path.rfind("/").unwrap_or(0)+1].to_string();
+                state.selected = 0;
+            } else {
+                state.path = "/".to_string();
+            }
+        },
+        KeyCode::Enter => {
+            if state.entries[state.selected as usize].is_file {
+                let mut p = state.entries[state.selected as usize].path.clone();
+                p.pop();
+                Command::new("mpv")
+                    .arg(p)
+                    .stdout(File::create("./log")?)
+                    .spawn()?;
+            }
+        }
         _ => (),
     };
 
     return Ok(());
 }
 
-fn draw() -> Result<(), Err> {
+fn update(state: &mut State) -> Result<(), Err> {
+    let dir = fs::read_dir(state.path.as_str());
+    if dir.is_err() {
+        let _ = quit();
+    }
+    state.entries.clear();
+    for d in dir.unwrap() {
+        state.entries.push(Entry {
+            path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string() + "/",
+            name: d.as_ref().unwrap().file_name().into_string().unwrap(),
+            is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
+        });
+    }
+    state.entries.sort_by_key(|e| e.name.clone());
+    if state.selected < 0 || state.selected >= state.entries.len() as i32 {
+        if state.entries.len() > 0 {
+            state.selected = state.selected.rem_euclid(state.entries.len() as i32);
+        }
+    }
+
+    return Ok(());
+}
+
+fn draw(state: &State) -> Result<(), Err> {
     let fg: Color = Color::White;
     let bg: Color = Color::White;
     let max_size: (u16, u16) = (120, 20);
@@ -42,13 +114,26 @@ fn draw() -> Result<(), Err> {
     size = (min(size.0, max_size.0), min(size.1, max_size.1));
 
     clear()?;
-    draw_rect(0, 0, size.0, size.1, bg)?;
+    draw_rect(0, 0, size.0-1, size.1-1, bg)?;
 
-    let paths = fs::read_dir("./").unwrap();
-    let mut y = 1;
-    for path in paths {
-        draw_text(2, y, path.unwrap().path().as_os_str().to_str().unwrap(), fg)?;
-        y += 1;
+    draw_text(1, 0, format!(" {0} ", state.path).as_str(), fg)?;
+
+    let mut offset: i32 = 1;
+    if state.selected >= size.1 as i32 - 2 {
+        offset = size.1 as i32 - state.selected - 2;
+    }
+
+    let mut i: i32 = 0;
+    for entry in state.entries.clone() {
+        let y = i + offset;
+        if y > 0 && y < size.1 as i32 - 1 {
+            if state.selected == i as i32 {
+                draw_text(2, y as u16, ">", fg)?;
+            }
+            let n = (&entry.name).to_string() + "/";
+            draw_text(4, y as u16, if entry.is_file {&entry.name} else {&n}, fg)?;
+        }
+        i += 1;
     }
 
     stdout().flush()?;
