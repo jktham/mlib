@@ -1,4 +1,4 @@
-use std::{cmp::min, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
+use std::{cmp::{max, min}, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
 use crossterm::{cursor, event::{self, Event, KeyCode, KeyEvent}, style::{self, Color, Stylize}, terminal, ExecutableCommand, QueueableCommand};
 
 type Err = Box<dyn std::error::Error>;
@@ -15,6 +15,7 @@ struct State {
     path: String,
     entries: Vec<Entry>,
     show_hidden: bool,
+    show_help: bool,
 }
 
 fn main() -> Result<(), Err> {
@@ -23,6 +24,7 @@ fn main() -> Result<(), Err> {
         path: "/mnt/".to_string(),
         entries: Vec::new(),
         show_hidden: false,
+        show_help: false,
     };
 
     terminal::enable_raw_mode()?;
@@ -56,8 +58,11 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
         KeyCode::Down => state.selected += 1,
         KeyCode::Right => {
             if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
-                state.path = state.entries[state.selected as usize].path.to_string();
-                state.selected = 0;
+                let p = state.entries[state.selected as usize].path.to_string();
+                if !fs::read_dir(p.as_str()).is_err() {
+                    state.path = p;
+                    state.selected = 0;
+                }
             }
         },
         KeyCode::Left => {
@@ -79,7 +84,8 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
                     .spawn()?;
             }
         },
-        KeyCode::Char('h') => state.show_hidden = !state.show_hidden,
+        KeyCode::Char('f') => state.show_hidden = !state.show_hidden,
+        KeyCode::Char('h') => state.show_help = !state.show_help,
         _ => (),
     };
 
@@ -113,14 +119,16 @@ fn update(state: &mut State) -> Result<(), Err> {
 }
 
 fn draw(state: &State) -> Result<(), Err> {
+    let min_size: (u16, u16) = (10, 3);
     let max_size: (u16, u16) = (400, 20);
     let mut size: (u16, u16) = crossterm::terminal::size()?;
-    size = (min(size.0, max_size.0), min(size.1, max_size.1));
+    size = (max(min(size.0, max_size.0), min_size.0), max(min(size.1, max_size.1), min_size.1));
 
     clear()?;
     draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
 
     draw_text(1, 0, format!(" {0} ", state.path).as_str(), Color::Cyan)?;
+    draw_text(size.0-9, size.1-1, " [h]elp ", Color::Cyan)?;
 
     let mut offset: i32 = 1;
     if state.selected >= size.1 as i32 - 2 {
@@ -141,6 +149,19 @@ fn draw(state: &State) -> Result<(), Err> {
             }
         }
         i += 1;
+    }
+
+    if state.show_help {
+        draw_fill(size.0-41, 1, size.0-3, size.1-2, ' ', Color::Cyan)?;
+        draw_rect(size.0-41, 1, size.0-3, size.1-2, Color::Cyan)?;
+        draw_text(size.0-40, 1, " help ", Color::Cyan)?;
+
+        draw_text(size.0-39, min(2, size.1-3), "[arrows]                 navigation", Color::Cyan)?;
+        draw_text(size.0-39, min(3, size.1-3), "[enter]                   play file", Color::Cyan)?;
+        draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", Color::Cyan)?;
+        draw_text(size.0-39, min(5, size.1-3), "[f]             toggle hidden files", Color::Cyan)?;
+        draw_text(size.0-39, min(6, size.1-3), "[h]                     toggle help", Color::Cyan)?;
+        draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", Color::Cyan)?;
     }
 
     stdout().flush()?;
@@ -181,6 +202,18 @@ fn draw_rect(x1: u16, y1: u16, x2: u16, y2: u16, color: Color) -> Result<(), Err
                 ;
             }
 
+        }
+    }
+    return Ok(());
+}
+
+fn draw_fill(x1: u16, y1: u16, x2: u16, y2: u16, c: char, color: Color) -> Result<(), Err> {
+    for x in x1..=x2 {
+        for y in y1..=y2 {
+            stdout()
+                .queue(cursor::MoveTo(x, y))?
+                .queue(style::PrintStyledContent(c.with(color)))?
+            ;
         }
     }
     return Ok(());
