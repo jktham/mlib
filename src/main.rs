@@ -1,5 +1,6 @@
 use std::{cmp::{max, min}, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
 use crossterm::{cursor, event::{self, Event, KeyCode, KeyEvent}, style::{self, Color, Stylize}, terminal, ExecutableCommand, QueueableCommand};
+use serde::{Serialize, Deserialize};
 
 type Err = Box<dyn std::error::Error>;
 
@@ -18,10 +19,29 @@ struct State {
     show_help: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Config {
+    default_path: String,
+    player: String,
+}
+
 fn main() -> Result<(), Err> {
+    let mut config = Config {
+        default_path: dirs::home_dir().unwrap().to_str().unwrap_or("/").to_string() + "/",
+        player: "mpv".to_string(),
+    };
+
+    if fs::exists("./config.json")? {
+        let s = fs::read_to_string("./config.json").unwrap();
+        config = serde_json::from_str(s.as_str()).unwrap();
+    } else {
+        let s = serde_json::to_string_pretty(&config).unwrap();
+        fs::write("./config.json", s)?;
+    }
+
     let mut state = State {
         selected: 0,
-        path: "/mnt/".to_string(),
+        path: config.default_path.clone(),
         entries: Vec::new(),
         show_hidden: false,
         show_help: false,
@@ -37,7 +57,7 @@ fn main() -> Result<(), Err> {
     loop {
         if event::poll(Duration::from_millis(1000))? {
             match event::read()? {
-                Event::Key(event) => input(event, &mut state)?,
+                Event::Key(event) => input(event, &mut state, &config)?,
                 Event::FocusGained => (),
                 Event::FocusLost => (),
                 Event::Mouse(_) => (),
@@ -51,7 +71,7 @@ fn main() -> Result<(), Err> {
     }
 }
 
-fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
+fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err> {
     match event.code {
         KeyCode::Char('q') => quit()?,
         KeyCode::Up => state.selected -= 1,
@@ -78,7 +98,7 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
             if state.entries.len() > 0 && state.entries[state.selected as usize].is_file {
                 let mut p = state.entries[state.selected as usize].path.clone();
                 p.pop();
-                Command::new("mpv")
+                Command::new(config.player.clone())
                     .arg(p)
                     .stdout(File::create("./out.log")?)
                     .stderr(File::create("./err.log")?)
@@ -166,7 +186,7 @@ fn draw(state: &State) -> Result<(), Err> {
         draw_text(size.0-39, min(2, size.1-3), "[arrows]                 navigation", Color::Cyan)?;
         draw_text(size.0-39, min(3, size.1-3), "[enter]                   play file", Color::Cyan)?;
         draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", Color::Cyan)?;
-        draw_text(size.0-39, min(5, size.1-3), "[f]             toggle hidden files", Color::Cyan)?;
+        draw_text(size.0-39, min(5, size.1-3), "[f]              toggle file filter", Color::Cyan)?;
         draw_text(size.0-39, min(6, size.1-3), "[h]                     toggle help", Color::Cyan)?;
         draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", Color::Cyan)?;
     }
