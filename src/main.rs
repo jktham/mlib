@@ -59,7 +59,7 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
         KeyCode::Right => {
             if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
                 let p = state.entries[state.selected as usize].path.to_string();
-                if !fs::read_dir(p.as_str()).is_err() {
+                if fs::read_dir(p.as_str()).is_ok() {
                     state.path = p;
                     state.selected = 0;
                 }
@@ -80,7 +80,8 @@ fn input(event: KeyEvent, state: &mut State) -> Result<(), Err> {
                 p.pop();
                 Command::new("mpv")
                     .arg(p)
-                    .stdout(File::create("./log")?)
+                    .stdout(File::create("./out.log")?)
+                    .stderr(File::create("./err.log")?)
                     .spawn()?;
             }
         },
@@ -99,12 +100,18 @@ fn update(state: &mut State) -> Result<(), Err> {
     }
     state.entries.clear();
     for d in dir.unwrap() {
-        let e = Entry {
+        let mut e = Entry {
             path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string() + "/",
             name: d.as_ref().unwrap().file_name().into_string().unwrap(),
             is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
         };
-        if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" {
+        let suffix_filter = [".mp4", ".mkv", ".avi", ".m4v", ".webm"];
+        if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" && (!e.is_file || suffix_filter.iter().any(|s| e.name.ends_with(s))) {
+            if !state.show_hidden {
+                for s in suffix_filter {
+                    e.name = e.name.replace(s, "");
+                }
+            }
             state.entries.push(e);
         }
     }
