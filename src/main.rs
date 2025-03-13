@@ -27,15 +27,15 @@ struct Config {
 
 fn main() -> Result<(), Err> {
     let mut config = Config {
-        default_path: dirs::home_dir().unwrap().to_str().unwrap_or("/").to_string() + "/",
+        default_path: dirs::home_dir().unwrap().to_str().unwrap_or("/").to_string(),
         player: "mpv".to_string(),
     };
 
     if fs::exists("./config.json")? {
-        let s = fs::read_to_string("./config.json").unwrap();
-        config = serde_json::from_str(s.as_str()).unwrap();
+        let s = fs::read_to_string("./config.json")?;
+        config = serde_json::from_str(s.as_str())?;
     } else {
-        let s = serde_json::to_string_pretty(&config).unwrap();
+        let s = serde_json::to_string_pretty(&config)?;
         fs::write("./config.json", s)?;
     }
 
@@ -87,19 +87,15 @@ fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err>
         },
         KeyCode::Left => {
             state.path = state.path[0..state.path.rfind("/").unwrap_or(0)].to_string();
-            if state.path.len() > 0 {
-                state.path = state.path[0..state.path.rfind("/").unwrap_or(0)+1].to_string();
-                state.selected = 0;
-            } else {
+            state.selected = 0;
+            if state.path == "" {
                 state.path = "/".to_string();
             }
         },
         KeyCode::Enter => {
             if state.entries.len() > 0 && state.entries[state.selected as usize].is_file {
-                let mut p = state.entries[state.selected as usize].path.clone();
-                p.pop();
                 Command::new(config.player.clone())
-                    .arg(p)
+                    .arg(state.entries[state.selected as usize].path.clone())
                     .stdout(File::create("./out.log")?)
                     .stderr(File::create("./err.log")?)
                     .spawn()?;
@@ -119,9 +115,9 @@ fn update(state: &mut State) -> Result<(), Err> {
         return Ok(());
     }
     state.entries.clear();
-    for d in dir.unwrap() {
+    for d in dir? {
         let mut e = Entry {
-            path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string() + "/",
+            path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string(),
             name: d.as_ref().unwrap().file_name().into_string().unwrap(),
             is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
         };
@@ -146,15 +142,15 @@ fn update(state: &mut State) -> Result<(), Err> {
 }
 
 fn draw(state: &State) -> Result<(), Err> {
-    let min_size: (u16, u16) = (10, 3);
-    let max_size: (u16, u16) = (400, 20);
-    let mut size: (u16, u16) = crossterm::terminal::size()?;
+    let min_size: (i32, i32) = (0, 0);
+    let max_size: (i32, i32) = (400, 20);
+    let mut size: (i32, i32) = (crossterm::terminal::size()?.0 as i32, crossterm::terminal::size()?.1 as i32);
     size = (max(min(size.0, max_size.0), min_size.0), max(min(size.1, max_size.1), min_size.1));
 
     clear()?;
     draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
 
-    draw_text(1, 0, format!(" {0} ", state.path).as_str(), Color::Cyan)?;
+    draw_text(1, 0, format!(" {0}{1} ", state.path, if state.path == "/" {""} else {"/"}).as_str(), Color::Cyan)?;
     draw_text(size.0-9, size.1-1, " [h]elp ", Color::Cyan)?;
 
     let mut offset: i32 = 1;
@@ -165,14 +161,14 @@ fn draw(state: &State) -> Result<(), Err> {
     let mut i: i32 = 0;
     for entry in state.entries.clone() {
         let y = i + offset;
-        if y > 0 && y < size.1 as i32 - 1 {
-            if state.selected == i as i32 {
-                draw_text(2, y as u16, ">", Color::White)?;
+        if y > 0 && y < size.1 - 1 {
+            if state.selected == i {
+                draw_text(2, y, ">", Color::White)?;
             }
             if entry.is_file {
-                draw_text(4, y as u16, &entry.name, Color::White)?;
+                draw_text(4, y, &entry.name, Color::White)?;
             } else {
-                draw_text(4, y as u16, &((&entry.name).to_string() + "/"), Color::Cyan)?;
+                draw_text(4, y, &((&entry.name).to_string() + "/"), Color::Cyan)?;
             }
         }
         i += 1;
@@ -186,7 +182,7 @@ fn draw(state: &State) -> Result<(), Err> {
         draw_text(size.0-39, min(2, size.1-3), "[arrows]                 navigation", Color::Cyan)?;
         draw_text(size.0-39, min(3, size.1-3), "[enter]                   play file", Color::Cyan)?;
         draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", Color::Cyan)?;
-        draw_text(size.0-39, min(5, size.1-3), "[f]              toggle file filter", Color::Cyan)?;
+        draw_text(size.0-39, min(5, size.1-3), "[f]                   toggle filter", Color::Cyan)?;
         draw_text(size.0-39, min(6, size.1-3), "[h]                     toggle help", Color::Cyan)?;
         draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", Color::Cyan)?;
     }
@@ -201,15 +197,21 @@ fn clear() -> Result<(), Err> {
     return Ok(());
 }
 
-fn draw_text(x: u16, y: u16, t: &str, color: Color) -> Result<(), Err> {
+fn draw_text(x: i32, y: i32, t: &str, color: Color) -> Result<(), Err> {
+    if x < 0 || y < 0 {
+        return Ok(());
+    }
     stdout()
-        .queue(cursor::MoveTo(x, y))?
+        .queue(cursor::MoveTo(x as u16, y as u16))?
         .queue(style::PrintStyledContent(t.with(color)))?
     ;
     return Ok(());
 }
 
-fn draw_rect(x1: u16, y1: u16, x2: u16, y2: u16, color: Color) -> Result<(), Err> {
+fn draw_rect(x1: i32, y1: i32, x2: i32, y2: i32, color: Color) -> Result<(), Err> {
+    if x1 < 0 || y1 < 0 || x1 > x2 || y1 > y2 {
+        return Ok(());
+    }
     for x in x1..=x2 {
         for y in y1..=y2 {
             let c: &str = match (x, y) {
@@ -224,7 +226,7 @@ fn draw_rect(x1: u16, y1: u16, x2: u16, y2: u16, color: Color) -> Result<(), Err
 
             if c != "" {
                 stdout()
-                    .queue(cursor::MoveTo(x, y))?
+                    .queue(cursor::MoveTo(x as u16, y as u16))?
                     .queue(style::PrintStyledContent(c.with(color)))?
                 ;
             }
@@ -234,11 +236,14 @@ fn draw_rect(x1: u16, y1: u16, x2: u16, y2: u16, color: Color) -> Result<(), Err
     return Ok(());
 }
 
-fn draw_fill(x1: u16, y1: u16, x2: u16, y2: u16, c: char, color: Color) -> Result<(), Err> {
+fn draw_fill(x1: i32, y1: i32, x2: i32, y2: i32, c: char, color: Color) -> Result<(), Err> {
+    if x1 < 0 || y1 < 0 || x1 > x2 || y1 > y2 {
+        return Ok(());
+    }
     for x in x1..=x2 {
         for y in y1..=y2 {
             stdout()
-                .queue(cursor::MoveTo(x, y))?
+                .queue(cursor::MoveTo(x as u16, y as u16))?
                 .queue(style::PrintStyledContent(c.with(color)))?
             ;
         }
