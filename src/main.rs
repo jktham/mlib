@@ -1,4 +1,4 @@
-use std::{cmp::{max, min}, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
+use std::{cmp::{max, min}, collections::HashSet, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
 use crossterm::{cursor, event::{self, Event, KeyCode, KeyEvent}, style::{self, Color, Stylize}, terminal, ExecutableCommand, QueueableCommand};
 use serde::{Serialize, Deserialize};
 
@@ -9,6 +9,7 @@ struct Entry {
     path: String,
     name: String,
     is_file: bool,
+    is_watched: bool,
 }
 
 struct State {
@@ -21,14 +22,21 @@ struct State {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
-    default_path: String,
+    default_dir: String,
     player: String,
+    data_dir: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Data {
+    history: HashSet<String>,
 }
 
 fn main() -> Result<(), Err> {
     let mut config = Config {
-        default_path: dirs::home_dir().unwrap().to_str().unwrap().to_string(),
+        default_dir: dirs::home_dir().unwrap().to_str().unwrap().to_string(),
         player: String::from("mpv"),
+        data_dir: dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib",
     };
 
     let config_dir = dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib";
@@ -36,32 +44,47 @@ fn main() -> Result<(), Err> {
         let s = fs::read_to_string(config_dir.clone() + "/config.json")?;
         config = serde_json::from_str(s.as_str())?;
     } else {
-        let s = serde_json::to_string_pretty(&config)?;
         if !fs::exists(&config_dir)? {
             fs::create_dir(&config_dir)?;
         }
+        let s = serde_json::to_string_pretty(&config)?;
         fs::write(config_dir.clone() + "/config.json", s)?;
     }
 
     let mut state = State {
         selected: 0,
-        path: config.default_path.clone(),
+        path: config.default_dir.clone(),
         entries: Vec::new(),
         show_hidden: false,
         show_help: false,
     };
 
+    let mut data = Data {
+        history: HashSet::new(),
+    };
+
+    if fs::exists(&config.data_dir)? && fs::exists(config.data_dir.clone() + "/data.json")? {
+        let s = fs::read_to_string(config.data_dir.clone() + "/data.json")?;
+        data = serde_json::from_str(s.as_str())?;
+    } else {
+        if !fs::exists(&config.data_dir)? {
+            fs::create_dir(&config.data_dir)?;
+        }
+        let s = serde_json::to_string_pretty(&data)?;
+        fs::write(config.data_dir.clone() + "/data.json", s)?;
+    }
+
     terminal::enable_raw_mode()?;
     stdout().execute(cursor::Hide)?;
     stdout().execute(terminal::EnterAlternateScreen)?;
     
-    update(&mut state)?;
+    update(&mut state, &data)?;
     draw(&state)?;
 
     loop {
         if event::poll(Duration::from_millis(1000))? {
             match event::read()? {
-                Event::Key(event) => input(event, &mut state, &config)?,
+                Event::Key(event) => input(event, &mut state, &config, &mut data)?,
                 Event::FocusGained => (),
                 Event::FocusLost => (),
                 Event::Mouse(_) => (),
@@ -69,18 +92,18 @@ fn main() -> Result<(), Err> {
                 Event::Resize(_, _) => (),
             };
 
-            update(&mut state)?;
+            update(&mut state, &data)?;
             draw(&state)?;
         }
     }
 }
 
-fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err> {
+fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -> Result<(), Err> {
     match event.code {
         KeyCode::Char('q') => quit()?,
-        KeyCode::Up => state.selected -= 1,
-        KeyCode::Down => state.selected += 1,
-        KeyCode::Right => {
+        KeyCode::Char('w') | KeyCode::Up => state.selected -= 1,
+        KeyCode::Char('s') | KeyCode::Down => state.selected += 1,
+        KeyCode::Char('d') | KeyCode::Right => {
             if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
                 let p = state.entries[state.selected as usize].path.to_string();
                 if fs::read_dir(p.as_str()).is_ok() {
@@ -89,23 +112,35 @@ fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err>
                 }
             }
         },
-        KeyCode::Left => {
+        KeyCode::Char('a') | KeyCode::Left => {
             state.path = state.path[0..state.path.rfind("/").unwrap_or(0)].to_string();
             state.selected = 0;
             if state.path == "" {
                 state.path = String::from("/");
             }
         },
-        KeyCode::Enter => {
+        KeyCode::Char('e') | KeyCode::Enter => {
             if state.entries.len() > 0 && state.entries[state.selected as usize].is_file {
                 Command::new(config.player.clone())
                     .arg(state.entries[state.selected as usize].path.clone())
                     .stdout(File::create("./out.log")?)
                     .stderr(File::create("./err.log")?)
                     .spawn()?;
+                data.history.insert(state.entries[state.selected as usize].path.to_string());
+                fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
             }
         },
-        KeyCode::Char('f') => state.show_hidden = !state.show_hidden,
+        KeyCode::Char('f') => {
+            if state.entries.len() > 0 && state.selected < state.entries.len() as i32 {
+                if data.history.contains(&state.entries[state.selected as usize].path.to_string()) {
+                    data.history.remove(&state.entries[state.selected as usize].path.to_string());
+                } else {
+                    data.history.insert(state.entries[state.selected as usize].path.to_string());
+                }
+                fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+            }
+        },
+        KeyCode::Char('g') => state.show_hidden = !state.show_hidden,
         KeyCode::Char('h') => state.show_help = !state.show_help,
         _ => (),
     };
@@ -113,7 +148,7 @@ fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err>
     return Ok(());
 }
 
-fn update(state: &mut State) -> Result<(), Err> {
+fn update(state: &mut State, data: &Data) -> Result<(), Err> {
     let dir = fs::read_dir(state.path.as_str());
     if dir.is_err() {
         return Ok(());
@@ -124,7 +159,9 @@ fn update(state: &mut State) -> Result<(), Err> {
             path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string(),
             name: d.as_ref().unwrap().file_name().into_string().unwrap(),
             is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
+            is_watched: false,
         };
+        e.is_watched = data.history.contains(&e.path);
         let suffix_filter = [".mp4", ".mkv", ".avi", ".m4v", ".webm"];
         if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" && (!e.is_file || suffix_filter.iter().any(|s| e.name.ends_with(s))) {
             if !state.show_hidden {
@@ -170,7 +207,11 @@ fn draw(state: &State) -> Result<(), Err> {
                 draw_text(2, y, ">", Color::White)?;
             }
             if entry.is_file {
-                draw_text(4, y, &entry.name, Color::White)?;
+                if entry.is_watched {
+                    draw_text(4, y, &entry.name, Color::Green)?;
+                } else {
+                    draw_text(4, y, &entry.name, Color::White)?;
+                }
             } else {
                 draw_text(4, y, &((&entry.name).to_string() + "/"), Color::Cyan)?;
             }
@@ -183,11 +224,12 @@ fn draw(state: &State) -> Result<(), Err> {
         draw_rect(size.0-41, 1, size.0-3, size.1-2, Color::Cyan)?;
         draw_text(size.0-40, 1, " help ", Color::Cyan)?;
 
-        draw_text(size.0-39, min(2, size.1-3), "[arrows]                 navigation", Color::Cyan)?;
-        draw_text(size.0-39, min(3, size.1-3), "[enter]                   play file", Color::Cyan)?;
+        draw_text(size.0-39, min(2, size.1-3), "[wasd/arrows]            navigation", Color::Cyan)?;
+        draw_text(size.0-39, min(3, size.1-3), "[e/enter]                 play file", Color::Cyan)?;
         draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", Color::Cyan)?;
-        draw_text(size.0-39, min(5, size.1-3), "[f]                   toggle filter", Color::Cyan)?;
-        draw_text(size.0-39, min(6, size.1-3), "[h]                     toggle help", Color::Cyan)?;
+        draw_text(size.0-39, min(5, size.1-3), "[f]                  toggle watched", Color::Cyan)?;
+        draw_text(size.0-39, min(6, size.1-3), "[g]                   toggle filter", Color::Cyan)?;
+        draw_text(size.0-39, min(7, size.1-3), "[h]                     toggle help", Color::Cyan)?;
         draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", Color::Cyan)?;
     }
 
