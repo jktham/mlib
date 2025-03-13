@@ -27,16 +27,20 @@ struct Config {
 
 fn main() -> Result<(), Err> {
     let mut config = Config {
-        default_path: dirs::home_dir().unwrap().to_str().unwrap_or("/").to_string(),
-        player: "mpv".to_string(),
+        default_path: dirs::home_dir().unwrap().to_str().unwrap().to_string(),
+        player: String::from("mpv"),
     };
 
-    if fs::exists("./config.json")? {
-        let s = fs::read_to_string("./config.json")?;
+    let config_dir = dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib";
+    if fs::exists(&config_dir)? && fs::exists(config_dir.clone() + "/config.json")? {
+        let s = fs::read_to_string(config_dir.clone() + "/config.json")?;
         config = serde_json::from_str(s.as_str())?;
     } else {
         let s = serde_json::to_string_pretty(&config)?;
-        fs::write("./config.json", s)?;
+        if !fs::exists(&config_dir)? {
+            fs::create_dir(&config_dir)?;
+        }
+        fs::write(config_dir.clone() + "/config.json", s)?;
     }
 
     let mut state = State {
@@ -89,7 +93,7 @@ fn input(event: KeyEvent, state: &mut State, config: &Config) -> Result<(), Err>
             state.path = state.path[0..state.path.rfind("/").unwrap_or(0)].to_string();
             state.selected = 0;
             if state.path == "" {
-                state.path = "/".to_string();
+                state.path = String::from("/");
             }
         },
         KeyCode::Enter => {
