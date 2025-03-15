@@ -25,6 +25,7 @@ struct Config {
     default_dir: String,
     player: String,
     data_dir: String,
+    filetypes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -37,6 +38,7 @@ fn main() -> Result<(), Err> {
         default_dir: dirs::home_dir().unwrap().to_str().unwrap().to_string(),
         player: String::from("mpv"),
         data_dir: dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib",
+        filetypes: Vec::from([".mp4", ".mkv", ".avi", ".m4v", ".webm"].map(|s| s.to_string())),
     };
 
     let config_dir = dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib";
@@ -67,19 +69,21 @@ fn main() -> Result<(), Err> {
         let s = fs::read_to_string(config.data_dir.clone() + "/data.json")?;
         data = serde_json::from_str(s.as_str())?;
     } else {
-        if !fs::exists(&config.data_dir)? {
+        if !fs::exists(&config.data_dir)? && !fs::symlink_metadata(&config.data_dir).is_ok() {
             fs::create_dir(&config.data_dir)?;
         }
-        let s = serde_json::to_string_pretty(&data)?;
-        fs::write(config.data_dir.clone() + "/data.json", s)?;
+        if fs::exists(&config.data_dir)? && fs::symlink_metadata(&config.data_dir).is_ok() {
+            let s = serde_json::to_string_pretty(&data)?;
+            fs::write(config.data_dir.clone() + "/data.json", s)?;
+        }
     }
 
     terminal::enable_raw_mode()?;
     stdout().execute(cursor::Hide)?;
     stdout().execute(terminal::EnterAlternateScreen)?;
     
-    update(&mut state, &data)?;
-    draw(&state)?;
+    update(&mut state, &data, &config)?;
+    draw(&state, &config)?;
 
     loop {
         if event::poll(Duration::from_millis(1000))? {
@@ -92,8 +96,8 @@ fn main() -> Result<(), Err> {
                 Event::Resize(_, _) => (),
             };
 
-            update(&mut state, &data)?;
-            draw(&state)?;
+            update(&mut state, &data, &config)?;
+            draw(&state, &config)?;
         }
     }
 }
@@ -127,7 +131,9 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
                     .stderr(File::create("./err.log")?)
                     .spawn()?;
                 data.history.insert(state.entries[state.selected as usize].path.to_string());
-                fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+                if fs::exists(config.data_dir.clone() + "/data.json")? {
+                    fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+                }
             }
         },
         KeyCode::Char('f') => {
@@ -137,7 +143,9 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
                 } else {
                     data.history.insert(state.entries[state.selected as usize].path.to_string());
                 }
-                fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+                if fs::exists(config.data_dir.clone() + "/data.json")? {
+                    fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+                }
             }
         },
         KeyCode::Char('g') => state.show_hidden = !state.show_hidden,
@@ -148,7 +156,7 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
     return Ok(());
 }
 
-fn update(state: &mut State, data: &Data) -> Result<(), Err> {
+fn update(state: &mut State, data: &Data, config: &Config) -> Result<(), Err> {
     let dir = fs::read_dir(state.path.as_str());
     if dir.is_err() {
         return Ok(());
@@ -162,13 +170,7 @@ fn update(state: &mut State, data: &Data) -> Result<(), Err> {
             is_watched: false,
         };
         e.is_watched = data.history.contains(&e.path);
-        let suffix_filter = [".mp4", ".mkv", ".avi", ".m4v", ".webm"];
-        if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" && (!e.is_file || suffix_filter.iter().any(|s| e.name.ends_with(s))) {
-            if !state.show_hidden {
-                for s in suffix_filter {
-                    e.name = e.name.replace(s, "");
-                }
-            }
+        if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" && (!e.is_file || config.filetypes.iter().any(|s| e.name.ends_with(s))) {
             state.entries.push(e);
         }
     }
@@ -182,7 +184,7 @@ fn update(state: &mut State, data: &Data) -> Result<(), Err> {
     return Ok(());
 }
 
-fn draw(state: &State) -> Result<(), Err> {
+fn draw(state: &State, config: &Config) -> Result<(), Err> {
     let min_size: (i32, i32) = (0, 0);
     let max_size: (i32, i32) = (400, 20);
     let mut size: (i32, i32) = (crossterm::terminal::size()?.0 as i32, crossterm::terminal::size()?.1 as i32);
@@ -201,6 +203,12 @@ fn draw(state: &State) -> Result<(), Err> {
 
     let mut i: i32 = 0;
     for entry in state.entries.clone() {
+        let mut name = entry.name.clone();
+        if !state.show_hidden {
+            for s in config.filetypes.clone() {
+                name = name.replace(&s, "");
+            }
+        }
         let y = i + offset;
         if y > 0 && y < size.1 - 1 {
             if state.selected == i {
@@ -208,12 +216,12 @@ fn draw(state: &State) -> Result<(), Err> {
             }
             if entry.is_file {
                 if entry.is_watched {
-                    draw_text(4, y, &entry.name, Color::Green)?;
+                    draw_text(4, y, &name, Color::Green)?;
                 } else {
-                    draw_text(4, y, &entry.name, Color::White)?;
+                    draw_text(4, y, &name, Color::White)?;
                 }
             } else {
-                draw_text(4, y, &((&entry.name).to_string() + "/"), Color::Cyan)?;
+                draw_text(4, y, &((&name).to_string() + "/"), Color::Cyan)?;
             }
         }
         i += 1;
