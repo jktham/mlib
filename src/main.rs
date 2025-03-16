@@ -1,4 +1,4 @@
-use std::{cmp::{max, min}, collections::HashSet, fs::{self, File}, io::{stdout, Write}, process::Command, time::Duration};
+use std::{cmp::{max, min}, collections::HashSet, fs::{self, File}, io::{stdout, Write}, path::PathBuf, process::Command, time::Duration};
 use crossterm::{cursor, event::{self, Event, KeyCode, KeyEvent}, style::{self, Color, Stylize}, terminal, ExecutableCommand, QueueableCommand};
 use serde::{Serialize, Deserialize};
 
@@ -6,7 +6,7 @@ type Err = Box<dyn std::error::Error>;
 
 #[derive(Clone)]
 struct Entry {
-    path: String,
+    path: PathBuf,
     name: String,
     is_file: bool,
     is_watched: bool,
@@ -14,7 +14,7 @@ struct Entry {
 
 struct State {
     selected: i32,
-    path: String,
+    path: PathBuf,
     entries: Vec<Entry>,
     show_hidden: bool,
     show_help: bool,
@@ -22,35 +22,35 @@ struct State {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
-    default_dir: String,
+    default_dir: PathBuf,
     player: String,
-    data_dir: String,
+    data_dir: PathBuf,
     filetypes: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Data {
-    history: HashSet<String>,
+    history: HashSet<PathBuf>,
 }
 
 fn main() -> Result<(), Err> {
     let mut config = Config {
-        default_dir: dirs::home_dir().unwrap().to_str().unwrap().to_string(),
+        default_dir: dirs::home_dir().unwrap(),
         player: String::from("mpv"),
-        data_dir: dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib",
+        data_dir: dirs::config_dir().unwrap().join("mlib"),
         filetypes: Vec::from([".mp4", ".mkv", ".avi", ".m4v", ".webm"].map(|s| s.to_string())),
     };
 
-    let config_dir = dirs::config_dir().unwrap().to_str().unwrap().to_string() + "/mlib";
-    if fs::exists(&config_dir)? && fs::exists(config_dir.clone() + "/config.json")? {
-        let s = fs::read_to_string(config_dir.clone() + "/config.json")?;
+    let config_dir = dirs::config_dir().unwrap().join("mlib");
+    if fs::exists(&config_dir)? && fs::exists(config_dir.join("config.json"))? {
+        let s = fs::read_to_string(config_dir.join("config.json"))?;
         config = serde_json::from_str(s.as_str())?;
     } else {
         if !fs::exists(&config_dir)? {
             fs::create_dir(&config_dir)?;
         }
         let s = serde_json::to_string_pretty(&config)?;
-        fs::write(config_dir.clone() + "/config.json", s)?;
+        fs::write(config_dir.join("config.json"), s)?;
     }
 
     let mut state = State {
@@ -65,8 +65,8 @@ fn main() -> Result<(), Err> {
         history: HashSet::new(),
     };
 
-    if fs::exists(&config.data_dir)? && fs::exists(config.data_dir.clone() + "/data.json")? {
-        let s = fs::read_to_string(config.data_dir.clone() + "/data.json")?;
+    if fs::exists(&config.data_dir)? && fs::exists(config.data_dir.join("data.json"))? {
+        let s = fs::read_to_string(config.data_dir.join("data.json"))?;
         data = serde_json::from_str(s.as_str())?;
     } else {
         if !fs::exists(&config.data_dir)? && !fs::symlink_metadata(&config.data_dir).is_ok() {
@@ -74,7 +74,7 @@ fn main() -> Result<(), Err> {
         }
         if fs::exists(&config.data_dir)? && fs::symlink_metadata(&config.data_dir).is_ok() {
             let s = serde_json::to_string_pretty(&data)?;
-            fs::write(config.data_dir.clone() + "/data.json", s)?;
+            fs::write(config.data_dir.join("data.json"), s)?;
         }
     }
 
@@ -109,42 +109,33 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
         KeyCode::Char('s') | KeyCode::Down => state.selected += 1,
         KeyCode::Char('d') | KeyCode::Right => {
             if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
-                let p = state.entries[state.selected as usize].path.to_string();
-                if fs::read_dir(p.as_str()).is_ok() {
+                let p = state.entries[state.selected as usize].path.clone();
+                if fs::read_dir(&p).is_ok() {
                     state.path = p;
                     state.selected = 0;
                 }
             }
         },
         KeyCode::Char('a') | KeyCode::Left => {
-            state.path = state.path[0..state.path.rfind("/").unwrap_or(0)].to_string();
+            state.path = state.path.parent().unwrap_or(&PathBuf::from("/")).to_path_buf();
             state.selected = 0;
-            if state.path == "" {
-                state.path = String::from("/");
-            }
         },
         KeyCode::Char('e') | KeyCode::Enter => {
-            if state.entries.len() > 0 && state.entries[state.selected as usize].is_file {
-                Command::new(config.player.clone())
-                    .arg(state.entries[state.selected as usize].path.clone())
+            if state.entries.len() > 0 && state.selected < state.entries.len() as i32 && state.entries[state.selected as usize].is_file {
+                Command::new(&config.player)
+                    .arg(&state.entries[state.selected as usize].path)
                     .stdout(File::create("./out.log")?)
                     .stderr(File::create("./err.log")?)
                     .spawn()?;
-                data.history.insert(state.entries[state.selected as usize].path.to_string());
-                if fs::exists(config.data_dir.clone() + "/data.json")? {
-                    fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
-                }
+                hist_add(data, config, &state.entries[state.selected as usize])?;
             }
         },
         KeyCode::Char('f') => {
-            if state.entries.len() > 0 && state.selected < state.entries.len() as i32 {
-                if data.history.contains(&state.entries[state.selected as usize].path.to_string()) {
-                    data.history.remove(&state.entries[state.selected as usize].path.to_string());
+            if state.entries.len() > 0 && state.selected < state.entries.len() as i32 && state.entries[state.selected as usize].is_file {
+                if hist_contains(data, config, &state.entries[state.selected as usize]) {
+                    hist_remove(data, config, &state.entries[state.selected as usize])?;
                 } else {
-                    data.history.insert(state.entries[state.selected as usize].path.to_string());
-                }
-                if fs::exists(config.data_dir.clone() + "/data.json")? {
-                    fs::write(config.data_dir.clone() + "/data.json", serde_json::to_string_pretty(data)?)?;
+                    hist_add(data, config, &state.entries[state.selected as usize])?;
                 }
             }
         },
@@ -157,19 +148,19 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
 }
 
 fn update(state: &mut State, data: &Data, config: &Config) -> Result<(), Err> {
-    let dir = fs::read_dir(state.path.as_str());
+    let dir = fs::read_dir(&state.path);
     if dir.is_err() {
         return Ok(());
     }
     state.entries.clear();
     for d in dir? {
         let mut e = Entry {
-            path: d.as_ref().unwrap().path().as_os_str().to_str().unwrap().to_string(),
+            path: d.as_ref().unwrap().path(),
             name: d.as_ref().unwrap().file_name().into_string().unwrap(),
             is_file: d.as_ref().unwrap().file_type().unwrap().is_file(),
             is_watched: false,
         };
-        e.is_watched = data.history.contains(&e.path);
+        e.is_watched = hist_contains(data, config, &e);
         if state.show_hidden || !e.name.starts_with(".") && e.name != "System Volume Information" && (!e.is_file || config.filetypes.iter().any(|s| e.name.ends_with(s))) {
             state.entries.push(e);
         }
@@ -192,8 +183,8 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
 
     clear()?;
     draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
-
-    draw_text(1, 0, format!(" {0}{1} ", state.path, if state.path == "/" {""} else {"/"}).as_str(), Color::Cyan)?;
+    
+    draw_text(1, 0, format!(" {0}{1} ", state.path.to_string_lossy(), if state.path.to_string_lossy() == "/" {""} else {"/"}).as_str(), Color::Cyan)?;
     draw_text(size.0-9, size.1-1, " [h]elp ", Color::Cyan)?;
 
     let mut offset: i32 = 1;
@@ -243,6 +234,25 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
 
     stdout().flush()?;
 
+    return Ok(());
+}
+
+fn hist_contains(data: &Data, config: &Config, e: &Entry) -> bool {
+    return data.history.contains(&e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf());
+}
+
+fn hist_add(data: &mut Data, config: &Config, e: &Entry) -> Result<(), Err> {
+    data.history.insert(e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf().clone());
+    if fs::exists(config.data_dir.join("data.json"))? {
+        fs::write(config.data_dir.join("data.json"), serde_json::to_string_pretty(data)?)?;
+    }
+    return Ok(());
+}
+fn hist_remove(data: &mut Data, config: &Config, e: &Entry) -> Result<(), Err> {
+    data.history.remove(&e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf());
+    if fs::exists(config.data_dir.join("data.json"))? {
+        fs::write(config.data_dir.join("data.json"), serde_json::to_string_pretty(data)?)?;
+    }
     return Ok(());
 }
 
