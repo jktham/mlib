@@ -22,9 +22,9 @@ struct State {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
-    default_dir: PathBuf,
-    player: String,
+    media_dir: PathBuf,
     data_dir: PathBuf,
+    player: String,
     filetypes: Vec<String>,
 }
 
@@ -35,10 +35,10 @@ struct Data {
 
 fn main() -> Result<(), Err> {
     let mut config = Config {
-        default_dir: dirs::home_dir().unwrap(),
-        player: String::from("mpv"),
+        media_dir: dirs::home_dir().unwrap(),
         data_dir: dirs::config_dir().unwrap().join("mlib"),
-        filetypes: Vec::from([".mp4", ".mkv", ".avi", ".m4v", ".webm"].map(|s| s.to_string())),
+        player: String::from("mpv"),
+        filetypes: Vec::from([".mp4", ".mkv", ".avi", ".m4v", ".webm", ".mov"].map(|s| s.to_string())),
     };
 
     let config_dir = dirs::config_dir().unwrap().join("mlib");
@@ -55,7 +55,7 @@ fn main() -> Result<(), Err> {
 
     let mut state = State {
         selected: 0,
-        path: config.default_dir.clone(),
+        path: config.media_dir.clone(),
         entries: Vec::new(),
         show_hidden: false,
         show_help: false,
@@ -184,8 +184,8 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
     clear()?;
     draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
     
-    draw_text(1, 0, format!(" {0}{1} ", state.path.to_string_lossy(), if state.path.to_string_lossy() == "/" {""} else {"/"}).as_str(), Color::Cyan)?;
-    draw_text(size.0-9, size.1-1, " [h]elp ", Color::Cyan)?;
+    draw_text(1, 0, format!(" {0}{1} ", state.path.to_string_lossy(), if state.path.to_string_lossy() == "/" {""} else {"/"}).as_str(), size.0-2, Color::Cyan)?;
+    draw_text(size.0-9, size.1-1, " [h]elp ", 0, Color::Cyan)?;
 
     let mut offset: i32 = 1;
     if state.selected >= size.1 as i32 - 2 {
@@ -200,19 +200,20 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
                 name = name.replace(&s, "");
             }
         }
+        let max_len = size.0 - if state.show_help {46} else {6};
         let y = i + offset;
         if y > 0 && y < size.1 - 1 {
             if state.selected == i {
-                draw_text(2, y, ">", Color::White)?;
+                draw_text(2, y, ">", 0, Color::White)?;
             }
             if entry.is_file {
                 if entry.is_watched {
-                    draw_text(4, y, &name, Color::Green)?;
+                    draw_text(4, y, &name, max_len, Color::Green)?;
                 } else {
-                    draw_text(4, y, &name, Color::White)?;
+                    draw_text(4, y, &name, max_len, Color::White)?;
                 }
             } else {
-                draw_text(4, y, &((&name).to_string() + "/"), Color::Cyan)?;
+                draw_text(4, y, &((&name).to_string() + "/"), max_len, Color::Cyan)?;
             }
         }
         i += 1;
@@ -221,15 +222,15 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
     if state.show_help {
         draw_fill(size.0-41, 1, size.0-3, size.1-2, ' ', Color::Cyan)?;
         draw_rect(size.0-41, 1, size.0-3, size.1-2, Color::Cyan)?;
-        draw_text(size.0-40, 1, " help ", Color::Cyan)?;
+        draw_text(size.0-40, 1, " help ", 0, Color::Cyan)?;
 
-        draw_text(size.0-39, min(2, size.1-3), "[wasd/arrows]            navigation", Color::Cyan)?;
-        draw_text(size.0-39, min(3, size.1-3), "[e/enter]                 play file", Color::Cyan)?;
-        draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", Color::Cyan)?;
-        draw_text(size.0-39, min(5, size.1-3), "[f]                  toggle watched", Color::Cyan)?;
-        draw_text(size.0-39, min(6, size.1-3), "[g]                   toggle filter", Color::Cyan)?;
-        draw_text(size.0-39, min(7, size.1-3), "[h]                     toggle help", Color::Cyan)?;
-        draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", Color::Cyan)?;
+        draw_text(size.0-39, min(2, size.1-3), "[wasd/arrows]            navigation", 0, Color::Cyan)?;
+        draw_text(size.0-39, min(3, size.1-3), "[e/enter]                 play file", 0, Color::Cyan)?;
+        draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", 0, Color::Cyan)?;
+        draw_text(size.0-39, min(5, size.1-3), "[f]                  toggle watched", 0, Color::Cyan)?;
+        draw_text(size.0-39, min(6, size.1-3), "[g]                   toggle filter", 0, Color::Cyan)?;
+        draw_text(size.0-39, min(7, size.1-3), "[h]                     toggle help", 0, Color::Cyan)?;
+        draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", 0, Color::Cyan)?;
     }
 
     stdout().flush()?;
@@ -238,18 +239,18 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
 }
 
 fn hist_contains(data: &Data, config: &Config, e: &Entry) -> bool {
-    return data.history.contains(&e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf());
+    return data.history.contains(&e.path.strip_prefix(&config.media_dir).unwrap_or(&e.path).to_path_buf());
 }
 
 fn hist_add(data: &mut Data, config: &Config, e: &Entry) -> Result<(), Err> {
-    data.history.insert(e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf().clone());
+    data.history.insert(e.path.strip_prefix(&config.media_dir).unwrap_or(&e.path).to_path_buf().clone());
     if fs::exists(config.data_dir.join("data.json"))? {
         fs::write(config.data_dir.join("data.json"), serde_json::to_string_pretty(data)?)?;
     }
     return Ok(());
 }
 fn hist_remove(data: &mut Data, config: &Config, e: &Entry) -> Result<(), Err> {
-    data.history.remove(&e.path.strip_prefix(&config.default_dir).unwrap_or(&e.path).to_path_buf());
+    data.history.remove(&e.path.strip_prefix(&config.media_dir).unwrap_or(&e.path).to_path_buf());
     if fs::exists(config.data_dir.join("data.json"))? {
         fs::write(config.data_dir.join("data.json"), serde_json::to_string_pretty(data)?)?;
     }
@@ -261,9 +262,17 @@ fn clear() -> Result<(), Err> {
     return Ok(());
 }
 
-fn draw_text(x: i32, y: i32, t: &str, color: Color) -> Result<(), Err> {
+fn draw_text(x: i32, y: i32, text: &str, length: i32, color: Color) -> Result<(), Err> {
     if x < 0 || y < 0 {
         return Ok(());
+    }
+    let mut t = String::from(text);
+    if length > 0 {
+        t = text.chars().into_iter().take(length as usize).collect::<String>();
+        if length > 3 && text.chars().into_iter().count() > length as usize {
+            t = text.chars().into_iter().take((length-3) as usize).collect::<String>();
+            t += "...";
+        }
     }
     stdout()
         .queue(cursor::MoveTo(x as u16, y as u16))?
