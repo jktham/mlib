@@ -18,6 +18,7 @@ struct State {
     entries: Vec<Entry>,
     show_hidden: bool,
     show_help: bool,
+    prev_selected: Vec<i32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -59,6 +60,7 @@ fn main() -> Result<(), Err> {
         entries: Vec::new(),
         show_hidden: false,
         show_help: false,
+        prev_selected: Vec::new(),
     };
 
     let mut data = Data {
@@ -111,6 +113,7 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
             if state.entries.len() > 0 && !state.entries[state.selected as usize].is_file {
                 let p = state.entries[state.selected as usize].path.clone();
                 if fs::read_dir(&p).is_ok() {
+                    state.prev_selected.push(state.selected);
                     state.path = p;
                     state.selected = 0;
                 }
@@ -118,7 +121,7 @@ fn input(event: KeyEvent, state: &mut State, config: &Config, data: &mut Data) -
         },
         KeyCode::Char('a') | KeyCode::Left => {
             state.path = state.path.parent().unwrap_or(&PathBuf::from("/")).to_path_buf();
-            state.selected = 0;
+            state.selected = state.prev_selected.pop().unwrap_or(0);
         },
         KeyCode::Char('e') | KeyCode::Enter => {
             if state.entries.len() > 0 && state.selected < state.entries.len() as i32 && state.entries[state.selected as usize].is_file {
@@ -184,7 +187,11 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
     clear()?;
     draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
     
-    draw_text(1, 0, format!(" {0}{1} ", state.path.to_string_lossy(), if state.path.to_string_lossy() == "/" {""} else {"/"}).as_str(), size.0-2, Color::Cyan)?;
+    let mut path = state.path.to_string_lossy().to_string();
+    if path != "/" {
+        path += "/";
+    }
+    draw_text(1, 0, format!(" {0} ", path).as_str(), size.0-2, Color::Cyan)?;
     draw_text(size.0-9, size.1-1, " [h]elp ", 0, Color::Cyan)?;
 
     let mut offset: i32 = 1;
