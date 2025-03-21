@@ -185,14 +185,14 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
     size = (max(min(size.0, max_size.0), min_size.0), max(min(size.1, max_size.1), min_size.1));
 
     clear()?;
-    draw_rect(0, 0, size.0-1, size.1-1, Color::Red)?;
+    draw_rect(0, 0, size.0 - 1, size.1 - 1, Color::Red)?;
     
     let mut path = state.path.to_string_lossy().to_string();
     if path != "/" {
         path += "/";
     }
-    draw_text(1, 0, format!(" {0} ", path).as_str(), size.0-2, Color::Cyan)?;
-    draw_text(size.0-9, size.1-1, " [h]elp ", 0, Color::Cyan)?;
+    draw_text(1, 0, format!(" {0} ", path).as_str(), size.0 - 2, Color::Cyan)?;
+    draw_text(size.0 - 9, size.1 - 1, " [h]elp ", 0, Color::Cyan)?;
 
     let mut offset: i32 = 1;
     if state.selected >= size.1 as i32 - 2 {
@@ -204,7 +204,10 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
         let mut name = entry.name.clone();
         if !state.show_hidden {
             for s in config.filetypes.clone() {
-                name = name.replace(&s, "");
+                if name.ends_with(&s) {
+                    name.truncate(name.len() - s.len());
+                    break;
+                }
             }
         }
         let max_len = size.0 - if state.show_help {46} else {6};
@@ -227,17 +230,17 @@ fn draw(state: &State, config: &Config) -> Result<(), Err> {
     }
 
     if state.show_help {
-        draw_fill(size.0-41, 1, size.0-3, size.1-2, ' ', Color::Cyan)?;
-        draw_rect(size.0-41, 1, size.0-3, size.1-2, Color::Cyan)?;
-        draw_text(size.0-40, 1, " help ", 0, Color::Cyan)?;
+        draw_fill(size.0 - 41, 1, size.0 - 3, size.1 - 2, ' ', Color::Cyan)?;
+        draw_rect(size.0 - 41, 1, size.0 - 3, size.1 - 2, Color::Cyan)?;
+        draw_text(size.0 - 40, 1, " help ", 0, Color::Cyan)?;
 
-        draw_text(size.0-39, min(2, size.1-3), "[wasd/arrows]            navigation", 0, Color::Cyan)?;
-        draw_text(size.0-39, min(3, size.1-3), "[e/enter]                 play file", 0, Color::Cyan)?;
-        draw_text(size.0-39, min(4, size.1-3), "[q]                            quit", 0, Color::Cyan)?;
-        draw_text(size.0-39, min(5, size.1-3), "[f]                  toggle watched", 0, Color::Cyan)?;
-        draw_text(size.0-39, min(6, size.1-3), "[g]                   toggle filter", 0, Color::Cyan)?;
-        draw_text(size.0-39, min(7, size.1-3), "[h]                     toggle help", 0, Color::Cyan)?;
-        draw_text(size.0-39, size.1-3,         "[♥]                     mlib v0.1.0", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(2, size.1 - 3), "[wasd/arrows]            navigation", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(3, size.1 - 3), "[e/enter]                 play file", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(4, size.1 - 3), "[q]                            quit", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(5, size.1 - 3), "[f]                  toggle watched", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(6, size.1 - 3), "[g]                   toggle filter", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, min(7, size.1 - 3), "[h]                     toggle help", 0, Color::Cyan)?;
+        draw_text(size.0 - 39, size.1 - 3,         "[♥]                     mlib v0.1.0", 0, Color::Cyan)?;
     }
 
     stdout().flush()?;
@@ -277,7 +280,7 @@ fn draw_text(x: i32, y: i32, text: &str, length: i32, color: Color) -> Result<()
     if length > 0 {
         t = text.chars().into_iter().take(length as usize).collect::<String>();
         if length > 3 && text.chars().into_iter().count() > length as usize {
-            t = text.chars().into_iter().take((length-3) as usize).collect::<String>();
+            t = text.chars().into_iter().take((length - 3) as usize).collect::<String>();
             t += "...";
         }
     }
